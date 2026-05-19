@@ -47,34 +47,38 @@ jobs:
 
     steps:
       - name: Check health — ${{ matrix.project.name }} (${{ matrix.project.account }})
-        id: ping
         env:
           SUPABASE_ANON_KEY: ${{ secrets[matrix.project.secret] }}
         run: |
-          PROJECT_URL="https://${{ matrix.project.ref }}.supabase.co"
-          HEALTH_URL="${PROJECT_URL}/rest/v1/"
-
+          # /auth/v1/health is the correct public health endpoint for Supabase.
+          # It only needs the anon key as a header (no Bearer token required).
+          HEALTH_URL="https://${{ matrix.project.ref }}.supabase.co/auth/v1/health"
+ 
           echo "🔍 Pinging: ${{ matrix.project.name }}"
           echo "   Account : ${{ matrix.project.account }}"
           echo "   URL     : ${HEALTH_URL}"
-
-          HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+ 
+          RESPONSE=$(curl --silent \
             --max-time 15 \
+            --write-out "\n%{http_code}" \
             --header "apikey: ${SUPABASE_ANON_KEY}" \
-            --header "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
             "${HEALTH_URL}")
-
+ 
+          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+ 
           echo "   Status  : ${HTTP_STATUS}"
-
+          echo "   Body    : ${BODY}"
+ 
           if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
             echo "✅ ${{ matrix.project.name }} is healthy (HTTP ${HTTP_STATUS})"
           else
             echo "❌ ${{ matrix.project.name }} returned HTTP ${HTTP_STATUS}"
             echo ""
-            echo "::error title=${{ matrix.project.name }} is DOWN::Project '${{ matrix.project.name }}' (account: ${{ matrix.project.account }}) returned HTTP ${HTTP_STATUS}. URL: ${HEALTH_URL}"
+            echo "::error title=${{ matrix.project.name }} is DOWN::Project '${{ matrix.project.name }}' (account: ${{ matrix.project.account }}) returned HTTP ${HTTP_STATUS}. Response: ${BODY}"
             exit 1
           fi
-
+ 
       - name: Report failure details
         if: failure()
         run: |
