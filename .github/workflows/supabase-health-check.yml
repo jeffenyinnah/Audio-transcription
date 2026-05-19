@@ -14,15 +14,6 @@ jobs:
       fail-fast: false        # Check ALL projects even if one fails
       matrix:
         project:
-          # ----------------------------------------------------------------
-          # ADD YOUR PROJECTS HERE
-          # name:     A friendly label shown in logs and failure emails
-          # ref:      Your Supabase project ref (the subdomain part of the URL)
-          #           e.g. https://xyzabc123.supabase.co → ref is "xyzabc123"
-          # secret:   The GitHub Secret name holding that project's anon key
-          #           (add it under Settings → Secrets → Actions in your repo)
-          # account:  Optional label to group projects by Supabase account
-          # ----------------------------------------------------------------
           - name: "Medikal"
             ref: "rghrgxeyxbgxjyqztqwp"
             secret: "SUPABASE_ANON_KEY_PROJECT_MEDIKAL"
@@ -43,42 +34,78 @@ jobs:
             secret: "SUPABASE_ANON_KEY_PROJECT_BUILDTRACK"
             account: "Account B"
 
-          # Add more projects by copying the block above ↑
-
     steps:
       - name: Check health — ${{ matrix.project.name }} (${{ matrix.project.account }})
         env:
           SUPABASE_ANON_KEY: ${{ secrets[matrix.project.secret] }}
         run: |
-          # /auth/v1/health is the correct public health endpoint for Supabase.
-          # It only needs the anon key as a header (no Bearer token required).
-          HEALTH_URL="https://${{ matrix.project.ref }}.supabase.co/auth/v1/health"
- 
-          echo "🔍 Pinging: ${{ matrix.project.name }}"
-          echo "   Account : ${{ matrix.project.account }}"
-          echo "   URL     : ${HEALTH_URL}"
- 
-          RESPONSE=$(curl --silent \
+          BASE_URL="https://${{ matrix.project.ref }}.supabase.co"
+          HEALTH_URL="${BASE_URL}/auth/v1/health"
+          AUTH_PING_URL="${BASE_URL}/rest/v1/users?limit=1&select=id"
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  ${{ matrix.project.name }} — ${{ matrix.project.account }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # ── Step 1: Auth health endpoint ─────────────────────────────────
+          echo ""
+          echo "▶ Step 1: Auth health check"
+          echo "  URL: ${HEALTH_URL}"
+
+          HEALTH_RESPONSE=$(curl --silent \
             --max-time 15 \
             --write-out "\n%{http_code}" \
             --header "apikey: ${SUPABASE_ANON_KEY}" \
             "${HEALTH_URL}")
- 
-          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | head -n -1)
- 
-          echo "   Status  : ${HTTP_STATUS}"
-          echo "   Body    : ${BODY}"
- 
-          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-            echo "✅ ${{ matrix.project.name }} is healthy (HTTP ${HTTP_STATUS})"
+
+          HEALTH_STATUS=$(echo "$HEALTH_RESPONSE" | tail -n1)
+          HEALTH_BODY=$(echo "$HEALTH_RESPONSE" | head -n -1)
+
+          echo "  Status : ${HEALTH_STATUS}"
+          echo "  Body   : ${HEALTH_BODY}"
+
+          if [ "$HEALTH_STATUS" -ge 200 ] && [ "$HEALTH_STATUS" -lt 300 ]; then
+            echo "  ✅ Auth service is healthy"
           else
-            echo "❌ ${{ matrix.project.name }} returned HTTP ${HTTP_STATUS}"
-            echo ""
-            echo "::error title=${{ matrix.project.name }} is DOWN::Project '${{ matrix.project.name }}' (account: ${{ matrix.project.account }}) returned HTTP ${HTTP_STATUS}. Response: ${BODY}"
+            echo "  ❌ Auth service returned HTTP ${HEALTH_STATUS}"
+            echo "::error title=${{ matrix.project.name }} — Auth DOWN::Auth health check failed with HTTP ${HEALTH_STATUS}. Response: ${HEALTH_BODY}"
             exit 1
           fi
- 
+
+          # ── Step 2: Query auth.users to register real DB activity ────────
+          # This prevents Supabase from pausing the project due to inactivity.
+          # We use Accept-Profile: auth to query the auth schema.
+          # Any 2xx or 4xx response means the DB is alive (4xx = RLS is fine).
+          # Only a 5xx means something is actually wrong.
+          echo ""
+          echo "▶ Step 2: Querying auth.users (keeps project active)"
+          echo "  URL: ${AUTH_PING_URL}"
+
+          AUTH_RESPONSE=$(curl --silent \
+            --max-time 15 \
+            --write-out "\n%{http_code}" \
+            --header "apikey: ${SUPABASE_ANON_KEY}" \
+            --header "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            --header "Accept-Profile: auth" \
+            "${AUTH_PING_URL}")
+
+          AUTH_STATUS=$(echo "$AUTH_RESPONSE" | tail -n1)
+          AUTH_BODY=$(echo "$AUTH_RESPONSE" | head -n -1)
+
+          echo "  Status : ${AUTH_STATUS}"
+          echo "  Body   : ${AUTH_BODY}"
+
+          if [ "$AUTH_STATUS" -lt 500 ]; then
+            echo "  ✅ Database is active and reachable"
+          else
+            echo "  ❌ Database query failed with HTTP ${AUTH_STATUS}"
+            echo "::error title=${{ matrix.project.name }} — DB DOWN::Database query failed with HTTP ${AUTH_STATUS}. Response: ${AUTH_BODY}"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ ${{ matrix.project.name }} — all checks passed"
+
       - name: Report failure details
         if: failure()
         run: |
