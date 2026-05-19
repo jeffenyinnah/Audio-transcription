@@ -1,0 +1,91 @@
+name: Supabase Health Check
+
+on:
+  schedule:
+    - cron: '0 0 */3 * *'   # Runs every 36 hours
+  workflow_dispatch:          # Allows manual trigger from GitHub UI
+
+jobs:
+  health-check:
+    name: Ping Supabase Projects
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false        # Check ALL projects even if one fails
+      matrix:
+        project:
+          # ----------------------------------------------------------------
+          # ADD YOUR PROJECTS HERE
+          # name:     A friendly label shown in logs and failure emails
+          # ref:      Your Supabase project ref (the subdomain part of the URL)
+          #           e.g. https://xyzabc123.supabase.co → ref is "xyzabc123"
+          # secret:   The GitHub Secret name holding that project's anon key
+          #           (add it under Settings → Secrets → Actions in your repo)
+          # account:  Optional label to group projects by Supabase account
+          # ----------------------------------------------------------------
+          - name: "Medikal"
+            ref: "rghrgxeyxbgxjyqztqwp"
+            secret: "SUPABASE_ANON_KEY_PROJECT_MEDIKAL"
+            account: "Account A"
+
+          - name: "Loja"
+            ref: "csqbbdfwebwkrixhvpgr"
+            secret: "SUPABASE_ANON_KEY_PROJECT_LOJA"
+            account: "Account A"
+
+          - name: "Mgold"
+            ref: "raaysdhcokshjzeviemz"
+            secret: "SUPABASE_ANON_KEY_PROJECT_MGOLD"
+            account: "Account B"
+
+          - name: "Bulidtrack"
+            ref: "vbgaozcyiyfixrushgvh"
+            secret: "SUPABASE_ANON_KEY_PROJECT_BUILDTRACK"
+            account: "Account B"
+
+          # Add more projects by copying the block above ↑
+
+    steps:
+      - name: Check health — ${{ matrix.project.name }} (${{ matrix.project.account }})
+        id: ping
+        env:
+          SUPABASE_ANON_KEY: ${{ secrets[matrix.project.secret] }}
+        run: |
+          PROJECT_URL="https://${{ matrix.project.ref }}.supabase.co"
+          HEALTH_URL="${PROJECT_URL}/rest/v1/"
+
+          echo "🔍 Pinging: ${{ matrix.project.name }}"
+          echo "   Account : ${{ matrix.project.account }}"
+          echo "   URL     : ${HEALTH_URL}"
+
+          HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+            --max-time 15 \
+            --header "apikey: ${SUPABASE_ANON_KEY}" \
+            --header "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            "${HEALTH_URL}")
+
+          echo "   Status  : ${HTTP_STATUS}"
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "✅ ${{ matrix.project.name }} is healthy (HTTP ${HTTP_STATUS})"
+          else
+            echo "❌ ${{ matrix.project.name }} returned HTTP ${HTTP_STATUS}"
+            echo ""
+            echo "::error title=${{ matrix.project.name }} is DOWN::Project '${{ matrix.project.name }}' (account: ${{ matrix.project.account }}) returned HTTP ${HTTP_STATUS}. URL: ${HEALTH_URL}"
+            exit 1
+          fi
+
+      - name: Report failure details
+        if: failure()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  HEALTH CHECK FAILED"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Project : ${{ matrix.project.name }}"
+          echo "  Account : ${{ matrix.project.account }}"
+          echo "  Ref     : ${{ matrix.project.ref }}"
+          echo "  Time    : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "GitHub will send a failure email to the repository owner."
+          echo "Check the Actions tab for full logs."
